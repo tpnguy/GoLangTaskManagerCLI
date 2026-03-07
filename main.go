@@ -39,7 +39,16 @@ func main(){
 			fmt.Println(i, v.Title, v.Done)
 		}
 	case "add":
-		fmt.Println("Nothing for now.")
+		if len(os.Args) > 2 {
+			newTask := Task{
+				Title: os.Args[2],
+				Done:  false,
+			}
+			tasks = append(tasks, newTask)
+			fmt.Printf("Task: \"%s\" Added", newTask.Title)
+		} else {
+			fmt.Printf("Need to have another argument.")
+		}
 	default:
 		fmt.Println("None of the options matched.")
 	}
