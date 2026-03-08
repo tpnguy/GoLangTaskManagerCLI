@@ -1,11 +1,15 @@
 package main
 
-import "fmt"
-import "os"
+import (
+	// "encoding/json"
+	"fmt"
+	"os"
+	// "log"
+)
 
 type Task struct {
-	Title string
-	Done bool
+	Title string `json:"title"`
+	Done bool `json:"done"`
 }
 
 
@@ -26,6 +30,11 @@ func main(){
 	tasks := []Task{task1, task2, task3}
 
 
+	jsonData, err := os.ReadFile("tasks.json")
+	if err != nil {
+		fmt.Println("Couldn't find tasks.json. Creating...")	
+	}
+	fmt.Println(string(jsonData))
 	if len(os.Args) <= 1 {
 		fmt.Println("Usage: main.go list | main.go add")
 		return
