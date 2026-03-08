@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	// "log"
+	"strconv"
 )
 
 type Task struct {
@@ -37,7 +38,7 @@ func loadTasks() []Task {
 	return tasks
 }
 
-func saveTask(tasks []Task) {
+func saveTasks(tasks []Task) {
 	data, err := json.MarshalIndent(tasks, "", " ")
 	if err != nil{
 		panic(err)
@@ -48,13 +49,35 @@ func saveTask(tasks []Task) {
 	}
 }
 
+func updateTask(index int, tasks []Task){
+	if index >= 0 && index < len(tasks){
+		tasks[index].Done = true
+		fmt.Println("Task Updated.")
+		saveTasks(tasks)
+	} else {
+		fmt.Println("Task index out of range.")
+	}
+}
+
+func deleteIndex(index int, tasks []Task) []Task {
+	if index >= 0 && index < len(tasks){
+		tasks = append(tasks[:index], tasks[index+1:]...)
+		fmt.Println("Task deleted.")
+		saveTasks(tasks)
+		return tasks
+	} else{
+		fmt.Println("Task index out of range.")
+		return tasks
+	}
+}
+
 func main() {
 
 	tasks := loadTasks()
 
 	// fmt.Println(tasks)
 	if len(os.Args) <= 1 {
-		fmt.Println("Usage: main.go list | main.go add")
+		fmt.Println("Usage: main.go list | main.go add | main.go done")
 		return
 	}
 
@@ -63,7 +86,11 @@ func main() {
 	switch command {
 	case "list":
 		for i, v := range tasks {
-			fmt.Println(i, v.Title, v.Done)
+			status := "[ ]"
+			if v.Done {
+				status = "[X]"
+			}
+			fmt.Println(i, status, v.Title)
 		}
 	case "add":
 		if len(os.Args) > 2 {
@@ -74,10 +101,28 @@ func main() {
 				Done:  false,
 			}
 			tasks = append(tasks, newTask)
-			fmt.Printf("Task: \"%s\" Added", newTask.Title)
-			saveTask(tasks)
+			fmt.Printf("Task: %q Added", newTask.Title)
+			saveTasks(tasks)
 		} else {
 			fmt.Printf("Need to have another argument.")
+		}
+	case "done":
+		if len(os.Args) > 2 {
+			index, err := strconv.Atoi(os.Args[2])
+			if err != nil {
+				fmt.Println("Error occured converting integer.")
+				return
+			}
+			updateTask(index, tasks)
+		}
+	case "delete":
+		if len(os.Args) > 2 {
+			index, err := strconv.Atoi(os.Args[2])
+			if err != nil {
+				fmt.Println("Error occured converting integer.")
+				return
+			}
+			tasks = deleteIndex(index, tasks)
 		}
 	default:
 		fmt.Println("None of the options matched.")
