@@ -4,8 +4,10 @@ import (
 	// "bytes"
 	"encoding/json"
 	"fmt"
+	// "net/http"
 	"os"
 	"strings"
+
 	// "log"
 	"strconv"
 )
@@ -25,10 +27,6 @@ func loadTasks() []Task {
 		panic(err)
 	}
 
-	// if len(bytes.TrimSpace(data)) == 0 {
-	// 	return []Task{}
-	// }
-
 	var tasks []Task
 	err = json.Unmarshal(data, &tasks)
 	if err != nil {
@@ -40,17 +38,17 @@ func loadTasks() []Task {
 
 func saveTasks(tasks []Task) {
 	data, err := json.MarshalIndent(tasks, "", " ")
-	if err != nil{
+	if err != nil {
 		panic(err)
 	}
 	err = os.WriteFile("tasks.json", data, 0644)
-	if err != nil{
+	if err != nil {
 		panic(err)
 	}
 }
 
-func updateTask(index int, tasks []Task){
-	if index >= 0 && index < len(tasks){
+func setTaskDone(index int, tasks []Task) {
+	if index >= 0 && index < len(tasks) {
 		tasks[index].Done = true
 		fmt.Println("Task Updated.")
 		saveTasks(tasks)
@@ -60,12 +58,12 @@ func updateTask(index int, tasks []Task){
 }
 
 func deleteIndex(index int, tasks []Task) []Task {
-	if index >= 0 && index < len(tasks){
+	if index >= 0 && index < len(tasks) {
 		tasks = append(tasks[:index], tasks[index+1:]...)
 		fmt.Println("Task deleted.")
 		saveTasks(tasks)
 		return tasks
-	} else{
+	} else {
 		fmt.Println("Task index out of range.")
 		return tasks
 	}
@@ -113,7 +111,7 @@ func main() {
 				fmt.Println("Error occured converting integer.")
 				return
 			}
-			updateTask(index, tasks)
+			setTaskDone(index, tasks)
 		}
 	case "delete":
 		if len(os.Args) > 2 {
