@@ -7,9 +7,9 @@ import (
 	// "fmt"
 	"net/http"
 	"os"
-	// "strings"
+	"strings"
 	// "log"
-	// "strconv"
+	"strconv"
 )
 
 type Task struct {
@@ -20,7 +20,18 @@ type Task struct {
 
 type App struct {
 	Tasks []Task
+	NextID int
 	Mu sync.Mutex
+}
+
+func nextTaskID(tasks []Task) int {
+	maxID := 0
+	for _, t := range tasks {
+		if t.ID > maxID {
+			maxID = t.ID
+		}
+	}
+	return maxID + 1
 }
 
 
@@ -87,9 +98,13 @@ func (a *App) postTasks(w http.ResponseWriter, r *http.Request){
 	a.Mu.Lock()
 	defer a.Mu.Unlock()
 
-	task.ID = len(a.Tasks) + 1
+	task.ID = a.NextID
+	a.NextID++
 	a.Tasks = append(a.Tasks, task)
-	saveTasks(a.Tasks)
+	if err := saveTasks(a.Tasks); err != nil {
+		http.Error(w, "unable to save task", http.StatusInternalServerError)
+		return
+	}
 
 	enc := json.NewEncoder(w)
 
@@ -100,6 +115,43 @@ func (a *App) postTasks(w http.ResponseWriter, r *http.Request){
 		http.Error(w, "failed to encode response", http.StatusInternalServerError)
 		return
 	}
+}
+
+func (a *App) deleteTask(w http.ResponseWriter, r *http.Request){
+	w.Header().Set("Content-Type", "application/json")
+
+	path := strings.TrimPrefix(r.URL.Path, "/tasks/")
+	id, err := strconv.Atoi(path)
+	if err != nil {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+
+	a.Mu.Lock()
+	defer a.Mu.Unlock()
+
+	foundIndex := -1
+	for i := range a.Tasks {
+		if a.Tasks[i].ID == id {
+			foundIndex = i
+			break
+		}
+	}
+	if foundIndex == -1 {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+
+	a.Tasks = append(a.Tasks[:foundIndex], a.Tasks[foundIndex+1:]...)
+	if err := saveTasks(a.Tasks); err != nil {
+		http.Error(w, "failed to save tasks", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]any{
+		"message":"deleted",
+		"id": id,
+	})
 }
 
 func (a *App) tasksHandler(w http.ResponseWriter, r *http.Request){
@@ -113,11 +165,23 @@ func (a *App) tasksHandler(w http.ResponseWriter, r *http.Request){
 	}
 }
 
+func (a *App) tasksByIDHandler(w http.ResponseWriter, r *http.Request){
+	switch r.Method{
+	case http.MethodDelete:
+		a.deleteTask(w, r)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 func main() {
+	tasks := loadTasks()
 	app := &App {
-		Tasks: loadTasks(),
+		Tasks: tasks,
+		NextID: nextTaskID(tasks),
 	}
 	http.HandleFunc("/tasks", app.tasksHandler)
+	http.HandleFunc("/tasks/", app.tasksByIDHandler)
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		panic(err)
 	}
