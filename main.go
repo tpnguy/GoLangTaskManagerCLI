@@ -7,9 +7,9 @@ import (
 	// "fmt"
 	"net/http"
 	"os"
-	// "strings"
+	"strings"
 	// "log"
-	// "strconv"
+	"strconv"
 )
 
 type Task struct {
@@ -100,6 +100,36 @@ func (a *App) postTasks(w http.ResponseWriter, r *http.Request){
 		http.Error(w, "failed to encode response", http.StatusInternalServerError)
 		return
 	}
+}
+
+func (a *App) deleteTask(w http.ResponseWriter, r *http.Request){
+	w.Header().Set("Content-Type", "application/json")
+
+	path := strings.TrimPrefix(r.URL.Path, "/tasks/")
+	index, err := strconv.Atoi(path)
+	if err != nil {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+
+	if index < 0 || index >= len(a.Tasks){
+		http.Error(w, "task index out of range", http.StatusNotFound)
+		return
+	}
+
+	a.Mu.Lock()
+	defer a.Mu.Unlock()
+
+	a.Tasks = append(a.Tasks[:index], a.Tasks[index+1:]...)
+	if err := saveTasks(a.Tasks); err != nil {
+		http.Error(w, "failed to save tasks", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]any{
+		"message":"deleted",
+		"index": index,
+	})
 }
 
 func (a *App) tasksHandler(w http.ResponseWriter, r *http.Request){
