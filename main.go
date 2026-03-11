@@ -18,6 +18,11 @@ type Task struct {
 	Done  bool   `json:"done"`
 }
 
+type UpdateTaskRequest struct {
+	Title *string `json:"title"`
+	Done *bool `json:"bool"`
+}
+
 type App struct {
 	Tasks []Task
 	NextID int
@@ -154,6 +159,54 @@ func (a *App) deleteTask(w http.ResponseWriter, r *http.Request){
 	})
 }
 
+func (a *App) updateTask(w http.ResponseWriter, r *http.Request){
+	w.Header().Set("Content-Type", "application/json")
+	path := strings.TrimPrefix(r.URL.Path, "/tasks/")
+	id, err := strconv.Atoi(path)
+	if err != nil {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+	var update UpdateTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if update.Title == nil && update.Done == nil {
+		http.Error(w, "no fields provided for update", http.StatusBadRequest)
+		return
+	}
+
+	if update.Title != nil && *update.Title == "" {
+		http.Error(w, "title cannot be empty", http.StatusBadRequest)
+		return
+	}
+	a.Mu.Lock()
+	defer a.Mu.Unlock()
+
+	for i := range a.Tasks {
+		if a.Tasks[i].ID == id {
+			if update.Title != nil {
+				a.Tasks[i].Title = *update.Title
+			}
+			if update.Done != nil {
+				a.Tasks[i].Done = *update.Done
+			}
+			if err := saveTasks(a.Tasks); err != nil {
+				http.Error(w, "Unable to save task.", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			if err := json.NewEncoder(w).Encode(a.Tasks[i]); err != nil {
+				http.Error(w, "failed to encode response", http.StatusInternalServerError)
+				return
+			}	
+		}
+	}
+
+	http.Error(w, "Task not found.", http.StatusNotFound)
+}
+
 func (a *App) tasksHandler(w http.ResponseWriter, r *http.Request){
 	switch r.Method{
 	case http.MethodGet:
@@ -169,6 +222,8 @@ func (a *App) tasksByIDHandler(w http.ResponseWriter, r *http.Request){
 	switch r.Method{
 	case http.MethodDelete:
 		a.deleteTask(w, r)
+	case http.MethodPatch:
+		a.updateTask(w, r)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
