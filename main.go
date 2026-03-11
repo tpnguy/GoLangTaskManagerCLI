@@ -20,13 +20,24 @@ type Task struct {
 
 type UpdateTaskRequest struct {
 	Title *string `json:"title"`
-	Done *bool `json:"bool"`
+	Done *bool `json:"done"`
 }
 
 type App struct {
 	Tasks []Task
 	NextID int
 	Mu sync.Mutex
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, err = w.Write(append(data, '\n'))
+	return err
 }
 
 func nextTaskID(tasks []Task) int {
@@ -72,18 +83,13 @@ func saveTasks(tasks []Task) error {
 }
 
 func (a *App) getTasks(w http.ResponseWriter, r *http.Request){
-	w.Header().Set("Content-Type", "application/json")
-
 	a.Mu.Lock()
 	defer a.Mu.Unlock()
 
-	enc := json.NewEncoder(w)
-
-	enc.SetIndent("", " ")
-	if err := enc.Encode(a.Tasks); err != nil {
+	if err := writeJSON(w, http.StatusOK, a.Tasks); err != nil {
 		http.Error(w, "failed to encode response", http.StatusInternalServerError)
 		return
-	}	
+	}
 }
 
 func (a *App) postTasks(w http.ResponseWriter, r *http.Request){
@@ -110,21 +116,13 @@ func (a *App) postTasks(w http.ResponseWriter, r *http.Request){
 		http.Error(w, "unable to save task", http.StatusInternalServerError)
 		return
 	}
-
-	enc := json.NewEncoder(w)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-
-	if err := enc.Encode(task); err != nil {
+	if err := writeJSON(w, http.StatusCreated, task); err != nil {
 		http.Error(w, "failed to encode response", http.StatusInternalServerError)
 		return
 	}
 }
 
 func (a *App) deleteTask(w http.ResponseWriter, r *http.Request){
-	w.Header().Set("Content-Type", "application/json")
-
 	path := strings.TrimPrefix(r.URL.Path, "/tasks/")
 	id, err := strconv.Atoi(path)
 	if err != nil {
@@ -152,15 +150,16 @@ func (a *App) deleteTask(w http.ResponseWriter, r *http.Request){
 		http.Error(w, "failed to save tasks", http.StatusInternalServerError)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := writeJSON(w, http.StatusOK, map[string]any{
 		"message":"deleted",
 		"id": id,
-	})
+	}); err != nil {
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
+	}
 }
 
 func (a *App) updateTask(w http.ResponseWriter, r *http.Request){
-	w.Header().Set("Content-Type", "application/json")
 	path := strings.TrimPrefix(r.URL.Path, "/tasks/")
 	id, err := strconv.Atoi(path)
 	if err != nil {
@@ -196,14 +195,13 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request){
 				http.Error(w, "Unable to save task.", http.StatusInternalServerError)
 				return
 			}
-			w.WriteHeader(http.StatusOK)
-			if err := json.NewEncoder(w).Encode(a.Tasks[i]); err != nil {
+			if err := writeJSON(w, http.StatusOK, a.Tasks[i]); err != nil {
 				http.Error(w, "failed to encode response", http.StatusInternalServerError)
 				return
-			}	
+			}
+			return
 		}
 	}
-
 	http.Error(w, "Task not found.", http.StatusNotFound)
 }
 
@@ -237,7 +235,7 @@ func main() {
 	}
 	http.HandleFunc("/tasks", app.tasksHandler)
 	http.HandleFunc("/tasks/", app.tasksByIDHandler)
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	if err := http.ListenAndServe(":4999", nil); err != nil {
 		panic(err)
 	}
 }
