@@ -26,7 +26,21 @@ type UpdateTaskRequest struct {
 type App struct {
 	Tasks []Task
 	NextID int
-	Mu sync.Mutex
+	Mu sync.RWMutex
+}
+
+func findTaskIndexById(tasks []Task, index int) int {
+	for i := range tasks {
+		if tasks[i].ID == index{
+			return i
+		}
+	}
+	return -1
+}
+
+func parseTaskID(r *http.Request) (int, error) {
+	path := strings.TrimPrefix(r.URL.Path, "/tasks/")
+	return strconv.Atoi(path)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) error {
@@ -92,6 +106,26 @@ func (a *App) getTasks(w http.ResponseWriter, r *http.Request){
 	}
 }
 
+func (a *App) getTaskByID(w http.ResponseWriter, r *http.Request) {
+	id, err := parseTaskID(r)
+	if err != nil {
+		http.Error(w, "invalid task id", http.StatusBadRequest)
+		return
+	}
+
+	a.Mu.RLock()
+	defer a.Mu.RUnlock()
+	
+	foundIndex := findTaskIndexById(a.Tasks, id)
+	if foundIndex != -1 {
+		if err := writeJSON(w, http.StatusOK, a.Tasks[foundIndex]); err != nil {
+			http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		}
+	} else {
+		http.Error(w, "Task not found.", http.StatusNotFound)	
+	}
+}
+
 func (a *App) postTasks(w http.ResponseWriter, r *http.Request){
 	
 	var task Task
@@ -122,9 +156,8 @@ func (a *App) postTasks(w http.ResponseWriter, r *http.Request){
 	}
 }
 
-func (a *App) deleteTask(w http.ResponseWriter, r *http.Request){
-	path := strings.TrimPrefix(r.URL.Path, "/tasks/")
-	id, err := strconv.Atoi(path)
+func (a *App) deleteTask(w http.ResponseWriter, r *http.Request) {
+	id, err := parseTaskID(r)
 	if err != nil {
 		http.Error(w, "invalid task id", http.StatusBadRequest)
 		return
@@ -133,13 +166,8 @@ func (a *App) deleteTask(w http.ResponseWriter, r *http.Request){
 	a.Mu.Lock()
 	defer a.Mu.Unlock()
 
-	foundIndex := -1
-	for i := range a.Tasks {
-		if a.Tasks[i].ID == id {
-			foundIndex = i
-			break
-		}
-	}
+	foundIndex := findTaskIndexById(a.Tasks, id)
+
 	if foundIndex == -1 {
 		http.Error(w, "task not found", http.StatusNotFound)
 		return
@@ -159,9 +187,8 @@ func (a *App) deleteTask(w http.ResponseWriter, r *http.Request){
 	}
 }
 
-func (a *App) updateTask(w http.ResponseWriter, r *http.Request){
-	path := strings.TrimPrefix(r.URL.Path, "/tasks/")
-	id, err := strconv.Atoi(path)
+func (a *App) updateTask(w http.ResponseWriter, r *http.Request) {
+	id, err := parseTaskID(r)
 	if err != nil {
 		http.Error(w, "invalid task id", http.StatusBadRequest)
 		return
@@ -180,29 +207,31 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request){
 		http.Error(w, "title cannot be empty", http.StatusBadRequest)
 		return
 	}
+
 	a.Mu.Lock()
 	defer a.Mu.Unlock()
 
-	for i := range a.Tasks {
-		if a.Tasks[i].ID == id {
-			if update.Title != nil {
-				a.Tasks[i].Title = *update.Title
-			}
-			if update.Done != nil {
-				a.Tasks[i].Done = *update.Done
-			}
-			if err := saveTasks(a.Tasks); err != nil {
-				http.Error(w, "Unable to save task.", http.StatusInternalServerError)
-				return
-			}
-			if err := writeJSON(w, http.StatusOK, a.Tasks[i]); err != nil {
-				http.Error(w, "failed to encode response", http.StatusInternalServerError)
-				return
-			}
+	foundIndex := findTaskIndexById(a.Tasks, id)
+	if foundIndex != -1 {
+		if update.Title != nil {
+			a.Tasks[foundIndex].Title = *update.Title
+		}
+		if update.Done != nil {
+			a.Tasks[foundIndex].Done = *update.Done
+		}
+		if err := saveTasks(a.Tasks); err != nil {
+			http.Error(w, "Unable to save task.", http.StatusInternalServerError)
 			return
 		}
+		if err := writeJSON(w, http.StatusOK, a.Tasks[foundIndex]); err != nil {
+			http.Error(w, "failed to encode response", http.StatusInternalServerError)
+			return
+		}
+		return
+	} else{
+		http.Error(w, "Task not found.", http.StatusNotFound)
 	}
-	http.Error(w, "Task not found.", http.StatusNotFound)
+
 }
 
 func (a *App) tasksHandler(w http.ResponseWriter, r *http.Request){
@@ -218,6 +247,8 @@ func (a *App) tasksHandler(w http.ResponseWriter, r *http.Request){
 
 func (a *App) tasksByIDHandler(w http.ResponseWriter, r *http.Request){
 	switch r.Method{
+	case http.MethodGet:
+		a.getTaskByID(w, r)
 	case http.MethodDelete:
 		a.deleteTask(w, r)
 	case http.MethodPatch:
@@ -235,7 +266,7 @@ func main() {
 	}
 	http.HandleFunc("/tasks", app.tasksHandler)
 	http.HandleFunc("/tasks/", app.tasksByIDHandler)
-	if err := http.ListenAndServe(":4999", nil); err != nil {
+	if err := http.ListenAndServe(":8080", nil); err != nil {
 		panic(err)
 	}
 }
