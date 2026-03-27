@@ -1,29 +1,36 @@
 package main
 
 import (
-	// "bytes"
 	"encoding/json"
+	"errors"
 	"sync"
-	// "fmt"
+
 	"net/http"
 	"os"
 	"strings"
-	// "log"
+
 	"strconv"
+
+	"database/sql"
+
+	_ "modernc.org/sqlite"
+
+	"log"
 )
 
 type Task struct {
-	ID int `json:"id"`
+	ID    int    `json:"id"`
 	Title string `json:"title"`
 	Done  bool   `json:"done"`
 }
 
 type UpdateTaskRequest struct {
 	Title *string `json:"title"`
-	Done *bool `json:"done"`
+	Done  *bool   `json:"done"`
 }
 
 type App struct {
+	DB *sql.DB
 	Tasks []Task
 	NextID int
 	Mu sync.RWMutex
@@ -31,7 +38,7 @@ type App struct {
 
 func findTaskIndexById(tasks []Task, index int) int {
 	for i := range tasks {
-		if tasks[i].ID == index{
+		if tasks[i].ID == index {
 			return i
 		}
 	}
@@ -44,7 +51,7 @@ func parseTaskID(r *http.Request) (int, error) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) error {
-	data, err := json.Marshal(v)
+	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -63,7 +70,6 @@ func nextTaskID(tasks []Task) int {
 	}
 	return maxID + 1
 }
-
 
 func loadTasks() []Task {
 
@@ -87,7 +93,7 @@ func loadTasks() []Task {
 func saveTasks(tasks []Task) error {
 	data, err := json.MarshalIndent(tasks, "", " ")
 	if err != nil {
-		return err	
+		return err
 	}
 	err = os.WriteFile("tasks.json", data, 0644)
 	if err != nil {
@@ -96,11 +102,30 @@ func saveTasks(tasks []Task) error {
 	return nil
 }
 
-func (a *App) getTasks(w http.ResponseWriter, r *http.Request){
-	a.Mu.Lock()
-	defer a.Mu.Unlock()
+func (a *App) getTasks(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.DB.Query("SELECT id, title, done FROM tasks")
+	if err != nil {
+		http.Error(w, "failed to fetch tasks", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
 
-	if err := writeJSON(w, http.StatusOK, a.Tasks); err != nil {
+	var tasks []Task
+
+	for rows.Next() {
+		var task Task
+		if err := rows.Scan(&task.ID, &task.Title, &task.Done); err != nil {
+			http.Error(w, "failed to scan task", http.StatusInternalServerError)
+			return
+		}
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "failed to fetch tasks", http.StatusInternalServerError)
+		return
+	}
+
+	if err := writeJSON(w, http.StatusOK, tasks); err != nil {
 		http.Error(w, "failed to encode response", http.StatusInternalServerError)
 		return
 	}
@@ -108,29 +133,33 @@ func (a *App) getTasks(w http.ResponseWriter, r *http.Request){
 
 func (a *App) getTaskByID(w http.ResponseWriter, r *http.Request) {
 	id, err := parseTaskID(r)
+
 	if err != nil {
 		http.Error(w, "invalid task id", http.StatusBadRequest)
 		return
 	}
 
-	a.Mu.RLock()
-	defer a.Mu.RUnlock()
-	
-	foundIndex := findTaskIndexById(a.Tasks, id)
-	if foundIndex != -1 {
-		if err := writeJSON(w, http.StatusOK, a.Tasks[foundIndex]); err != nil {
-			http.Error(w, "failed to encode response", http.StatusInternalServerError)
+	var task Task
+	row := a.DB.QueryRow(`SELECT id, title, done FROM tasks WHERE id = ?`, id)
+	if err := row.Scan(&task.ID, &task.Title, &task.Done); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "task not found", http.StatusNotFound)
+			return
 		}
-	} else {
-		http.Error(w, "Task not found.", http.StatusNotFound)	
+		http.Error(w, "failed to fetch task", http.StatusInternalServerError)
+		return
+	}
+	if err := writeJSON(w, http.StatusOK, task); err != nil {
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
 	}
 }
 
-func (a *App) postTasks(w http.ResponseWriter, r *http.Request){
-	
+func (a *App) postTasks(w http.ResponseWriter, r *http.Request) {
 	var task Task
-	err := json.NewDecoder(r.Body).Decode(&task)
-	if err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&task); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
@@ -140,16 +169,25 @@ func (a *App) postTasks(w http.ResponseWriter, r *http.Request){
 		return
 	}
 
-	a.Mu.Lock()
-	defer a.Mu.Unlock()
+	result, err := a.DB.Exec(
+    	"INSERT INTO tasks (title, done) VALUES (?, ?)",
+    	task.Title,
+    	task.Done,
+	) 
+	if err != nil {
+    	http.Error(w, "failed to insert task", http.StatusInternalServerError)
+    	return
+	}	
 
-	task.ID = a.NextID
-	a.NextID++
-	a.Tasks = append(a.Tasks, task)
-	if err := saveTasks(a.Tasks); err != nil {
-		http.Error(w, "unable to save task", http.StatusInternalServerError)
+	id, err := result.LastInsertId()
+	if err != nil {
+		http.Error(w, "failed to retrieve id", http.StatusInternalServerError)
 		return
 	}
+
+	task.ID = int(id)
+	task.Done = false
+
 	if err := writeJSON(w, http.StatusCreated, task); err != nil {
 		http.Error(w, "failed to encode response", http.StatusInternalServerError)
 		return
@@ -179,8 +217,8 @@ func (a *App) deleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := writeJSON(w, http.StatusOK, map[string]any{
-		"message":"deleted",
-		"id": id,
+		"message": "deleted",
+		"id":      id,
 	}); err != nil {
 		http.Error(w, "failed to encode response", http.StatusInternalServerError)
 		return
@@ -194,10 +232,15 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var update UpdateTaskRequest
-	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(&update); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
+
 	if update.Title == nil && update.Done == nil {
 		http.Error(w, "no fields provided for update", http.StatusBadRequest)
 		return
@@ -228,25 +271,24 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		return
-	} else{
+	} else {
 		http.Error(w, "Task not found.", http.StatusNotFound)
 	}
-
 }
 
-func (a *App) tasksHandler(w http.ResponseWriter, r *http.Request){
-	switch r.Method{
+func (a *App) tasksHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
 	case http.MethodGet:
 		a.getTasks(w, r)
 	case http.MethodPost:
-		a.postTasks(w,r)
+		a.postTasks(w, r)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-func (a *App) tasksByIDHandler(w http.ResponseWriter, r *http.Request){
-	switch r.Method{
+func (a *App) tasksByIDHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
 	case http.MethodGet:
 		a.getTaskByID(w, r)
 	case http.MethodDelete:
@@ -259,11 +301,31 @@ func (a *App) tasksByIDHandler(w http.ResponseWriter, r *http.Request){
 }
 
 func main() {
-	tasks := loadTasks()
-	app := &App {
-		Tasks: tasks,
-		NextID: nextTaskID(tasks),
+
+	db, err := sql.Open("sqlite", "tasks.db")
+	if err != nil {
+		log.Fatal(err)
 	}
+	defer db.Close()
+	
+	createTableQuery := `
+	CREATE TABLE IF NOT EXISTS tasks (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		title TEXT NOT NULL,
+		done BOOLEAN NOT NULL DEFAULT 0
+	);
+	`
+
+	_, err = db.Exec(createTableQuery)
+	if err != nil {
+		log.Fatal(err)
+	}	
+
+
+	app := &App {
+		DB: db,
+	}
+	
 	http.HandleFunc("/tasks", app.tasksHandler)
 	http.HandleFunc("/tasks/", app.tasksByIDHandler)
 	if err := http.ListenAndServe(":8080", nil); err != nil {
