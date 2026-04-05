@@ -30,10 +30,10 @@ type UpdateTaskRequest struct {
 }
 
 type App struct {
-	DB *sql.DB
-	Tasks []Task
+	DB     *sql.DB
+	Tasks  []Task
 	NextID int
-	Mu sync.RWMutex
+	Mu     sync.RWMutex
 }
 
 func findTaskIndexById(tasks []Task, index int) int {
@@ -170,14 +170,14 @@ func (a *App) postTasks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := a.DB.Exec(
-    	"INSERT INTO tasks (title, done) VALUES (?, ?)",
-    	task.Title,
-    	task.Done,
-	) 
+		"INSERT INTO tasks (title, done) VALUES (?, ?)",
+		task.Title,
+		task.Done,
+	)
 	if err != nil {
-    	http.Error(w, "failed to insert task", http.StatusInternalServerError)
-    	return
-	}	
+		http.Error(w, "failed to insert task", http.StatusInternalServerError)
+		return
+	}
 
 	id, err := result.LastInsertId()
 	if err != nil {
@@ -201,21 +201,22 @@ func (a *App) deleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.Mu.Lock()
-	defer a.Mu.Unlock()
-
-	foundIndex := findTaskIndexById(a.Tasks, id)
-
-	if foundIndex == -1 {
-		http.Error(w, "task not found", http.StatusNotFound)
+	result, err := a.DB.Exec("DELETE FROM tasks WHERE id = ?", id)
+	if err != nil {
+		http.Error(w, "delete query failed", http.StatusInternalServerError)
 		return
 	}
 
-	a.Tasks = append(a.Tasks[:foundIndex], a.Tasks[foundIndex+1:]...)
-	if err := saveTasks(a.Tasks); err != nil {
-		http.Error(w, "failed to save tasks", http.StatusInternalServerError)
+	n, err := result.RowsAffected()
+	if err != nil {
+		http.Error(w, "failed to read delete result", http.StatusInternalServerError)
 		return
 	}
+	if n == 0 {
+		http.Error(w, "no row found", http.StatusNotFound)
+		return
+	}
+
 	if err := writeJSON(w, http.StatusOK, map[string]any{
 		"message": "deleted",
 		"id":      id,
@@ -307,7 +308,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
-	
+
 	createTableQuery := `
 	CREATE TABLE IF NOT EXISTS tasks (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -319,13 +320,12 @@ func main() {
 	_, err = db.Exec(createTableQuery)
 	if err != nil {
 		log.Fatal(err)
-	}	
+	}
 
-
-	app := &App {
+	app := &App{
 		DB: db,
 	}
-	
+
 	http.HandleFunc("/tasks", app.tasksHandler)
 	http.HandleFunc("/tasks/", app.tasksByIDHandler)
 	if err := http.ListenAndServe(":8080", nil); err != nil {
