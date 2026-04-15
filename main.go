@@ -3,10 +3,8 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"sync"
 
 	"net/http"
-	"os"
 	"strings"
 
 	"strconv"
@@ -31,18 +29,6 @@ type UpdateTaskRequest struct {
 
 type App struct {
 	DB     *sql.DB
-	Tasks  []Task
-	NextID int
-	Mu     sync.RWMutex
-}
-
-func findTaskIndexById(tasks []Task, index int) int {
-	for i := range tasks {
-		if tasks[i].ID == index {
-			return i
-		}
-	}
-	return -1
 }
 
 func parseTaskID(r *http.Request) (int, error) {
@@ -61,46 +47,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) error {
 	return err
 }
 
-func nextTaskID(tasks []Task) int {
-	maxID := 0
-	for _, t := range tasks {
-		if t.ID > maxID {
-			maxID = t.ID
-		}
-	}
-	return maxID + 1
-}
-
-func loadTasks() []Task {
-
-	data, err := os.ReadFile("tasks.json")
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []Task{}
-		}
-		panic(err)
-	}
-
-	var tasks []Task
-	err = json.Unmarshal(data, &tasks)
-	if err != nil {
-		panic(err)
-	}
-
-	return tasks
-}
-
-func saveTasks(tasks []Task) error {
-	data, err := json.MarshalIndent(tasks, "", " ")
-	if err != nil {
-		return err
-	}
-	err = os.WriteFile("tasks.json", data, 0644)
-	if err != nil {
-		return err
-	}
-	return nil
-}
 
 func (a *App) getTasks(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.DB.Query("SELECT id, title, done FROM tasks")
@@ -252,28 +198,36 @@ func (a *App) updateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.Mu.Lock()
-	defer a.Mu.Unlock()
+	result, err := a.DB.Exec(
+		"UPDATE tasks set title = COALESCE(?, title), done = COALESCE(?, done) WHERE id = ?", update.Title, update.Done, id,
+	)	
 
-	foundIndex := findTaskIndexById(a.Tasks, id)
-	if foundIndex != -1 {
-		if update.Title != nil {
-			a.Tasks[foundIndex].Title = *update.Title
-		}
-		if update.Done != nil {
-			a.Tasks[foundIndex].Done = *update.Done
-		}
-		if err := saveTasks(a.Tasks); err != nil {
-			http.Error(w, "Unable to save task.", http.StatusInternalServerError)
-			return
-		}
-		if err := writeJSON(w, http.StatusOK, a.Tasks[foundIndex]); err != nil {
-			http.Error(w, "failed to encode response", http.StatusInternalServerError)
-			return
-		}
+	if err != nil {
+		http.Error(w, "unable to update database", http.StatusInternalServerError)
 		return
-	} else {
-		http.Error(w, "Task not found.", http.StatusNotFound)
+	}
+
+	n, err := result.RowsAffected()
+	if err != nil {
+		http.Error(w, "failed to read update result", http.StatusInternalServerError)
+		return
+	}
+
+	if n == 0 {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+
+	var task Task
+	row := a.DB.QueryRow("SELECT id, title, done FROM tasks WHERE id = ?", id)
+	if err := row.Scan(&task.ID, &task.Title, &task.Done); err != nil {
+		http.Error(w, "failed to fetch updated task", http.StatusInternalServerError)
+		return
+	}
+
+	if err := writeJSON(w, http.StatusOK, task); err != nil {
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		return
 	}
 }
 
@@ -328,6 +282,7 @@ func main() {
 
 	http.HandleFunc("/tasks", app.tasksHandler)
 	http.HandleFunc("/tasks/", app.tasksByIDHandler)
+	log.Println("Server listening on http://localhost:8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		panic(err)
 	}
